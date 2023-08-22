@@ -35,7 +35,7 @@ fn main() {
 
 fn run(args: &Args) -> Result<(), ErrorWithContext> {
     match &args.command {
-        Some(Command::Init) => init(&args.config),
+        Some(Command::Init) => init(&args.feeds),
         Some(Command::SetConsumerKey { key }) => args.with_config(|config| {
             set_consumer_key(config, key);
             Ok(())
@@ -43,6 +43,7 @@ fn run(args: &Args) -> Result<(), ErrorWithContext> {
         Some(Command::Login) => args.with_config(login),
         Some(Command::Add(cmd)) => args.with_config(|config| add(config, cmd)),
         Some(Command::Remove { feed_url }) => args.with_config(|config| remove(config, feed_url)),
+        Some(Command::List) => args.with_config(|config| list(config)),
         None => args.with_config(sync),
     }
 }
@@ -61,18 +62,31 @@ macro_rules! try_with_context {
     };
 }
 
-fn load_config(config_file_name: &Path) -> Result<Configuration, ErrorWithContext> {
-    let config_file = try_with_context!(
-        File::open(config_file_name),
-        format!("failed to open file {}", config_file_name.to_string_lossy())
+fn load_config(pocket_file_name: &Path, feeds_file_name: &Path) -> Result<Configuration, ErrorWithContext> {
+    let feeds_file = try_with_context!(
+        File::open(feeds_file_name),
+        format!("failed to open file {}", feeds_file_name.to_string_lossy())
     );
-    let config = try_with_context!(
-        serde_yaml::from_reader(config_file),
+    let mut config: Configuration = try_with_context!(
+        serde_yaml::from_reader(feeds_file),
         format!(
             "failed to load configuration from {}",
-            config_file_name.to_string_lossy()
+            feeds_file_name.to_string_lossy()
         )
     );
+
+    let pocket_file = try_with_context!(
+        File::open(pocket_file_name),
+        format!("failed to open file {}", pocket_file_name.to_string_lossy())
+    );
+    let pocket_config = try_with_context!(
+        serde_yaml::from_reader(pocket_file),
+        format!(
+            "failed to load configuration from {}",
+            feeds_file_name.to_string_lossy()
+        )
+    );
+    config.pocket = pocket_config;
     Ok(config)
 }
 
@@ -195,7 +209,7 @@ fn init(config_file_name: &Path) -> Result<(), ErrorWithContext> {
 }
 
 fn set_consumer_key(config: &mut Configuration, key: &str) {
-    config.consumer_key = Some(key.to_string());
+    config.pocket.consumer_key = Some(key.to_string());
 }
 
 fn login(config: &mut Configuration) -> Result<(), ErrorWithContext> {
@@ -205,7 +219,7 @@ fn login(config: &mut Configuration) -> Result<(), ErrorWithContext> {
         "unable to perform authorization"
     );
 
-    if config.access_token.is_some() {
+    if config.pocket.access_token.is_some() {
         println!(
             "note: There's already an access token in the configuration file. \
             Proceeding will overwrite this access token."
@@ -228,7 +242,7 @@ fn login(config: &mut Configuration) -> Result<(), ErrorWithContext> {
 
         match pocket.authorize() {
             Ok(_) => {
-                config.access_token = Some(String::from(pocket.access_token().unwrap()));
+                config.pocket.access_token = Some(String::from(pocket.access_token().unwrap()));
                 return Ok(());
             }
             Err(e) => {
@@ -313,11 +327,18 @@ fn remove(config: &mut Configuration, feed_url: &str) -> Result<(), ErrorWithCon
     Ok(())
 }
 
+fn list(config: &Configuration) -> Result<(), ErrorWithContext> {
+    for feed in &config.feeds {
+        println!("[Feed] ({}): {}", feed.url, feed.last_modified.as_ref().unwrap_or(&String::from("")))
+    }  
+    Ok(())
+}
+
 fn get_pocket(config: &Configuration, client: Client) -> Result<Pocket, PocketSetupError> {
-    match config.consumer_key {
+    match config.pocket.consumer_key {
         Some(ref consumer_key) => Ok(Pocket::new(
             consumer_key,
-            config.access_token.as_ref().map(|x| x.as_ref()),
+            config.pocket.access_token.as_ref().map(|x| x.as_ref()),
             client,
         )),
         None => Err(PocketSetupError::MissingConsumerKey),
@@ -328,7 +349,7 @@ fn get_authenticated_pocket(
     config: &Configuration,
     client: Client,
 ) -> Result<Pocket, PocketSetupError> {
-    get_pocket(config, client).and_then(|pocket| match config.access_token {
+    get_pocket(config, client).and_then(|pocket| match config.pocket.access_token {
         Some(_) => Ok(pocket),
         None => Err(PocketSetupError::MissingAccessToken),
     })
@@ -519,7 +540,10 @@ struct Args {
     /// A YAML file containing your feeds configuration.
     //#[clap(short, long, value_parser)]
     #[clap(index = 1)]
-    config: PathBuf,
+    feeds: PathBuf,
+    /// A YAML file containing pocket auth configuration.
+    #[clap(index = 2)]
+    pocket: PathBuf,
 
     #[clap(subcommand)]
     command: Option<Command>,
@@ -530,11 +554,11 @@ impl Args {
         &self,
         mut callback: impl FnMut(&mut Configuration) -> Result<(), ErrorWithContext>,
     ) -> Result<(), ErrorWithContext> {
-        let mut config = load_config(&self.config)?;
+        let mut config = load_config(&self.pocket, &self.feeds)?;
 
         callback(&mut config)?;
 
-        save_config(&config, &self.config)
+        save_config(&config, &self.feeds)
     }
 }
 
@@ -572,6 +596,9 @@ enum Command {
         /// The URL of the feed to remove.
         feed_url: String,
     },
+
+    /// List all feeds from your feeds configuration.
+    List,
 }
 
 #[derive(Parser, Debug)]
@@ -593,13 +620,20 @@ struct AddCommand {
 
 #[derive(Default, Deserialize, Serialize)]
 struct Configuration {
+    #[serde(skip)]
+    pocket: PocketConfiguration,
+
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
+    feeds: Vec<FeedConfiguration>,
+}
+
+#[derive(Default, Deserialize, Serialize)]
+struct PocketConfiguration {
     #[serde(skip_serializing_if = "Option::is_none")]
     consumer_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     access_token: Option<String>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    #[serde(default)]
-    feeds: Vec<FeedConfiguration>,
 }
 
 #[derive(Deserialize, Serialize)]
