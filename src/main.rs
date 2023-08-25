@@ -83,7 +83,7 @@ fn load_config(pocket_file_name: &Path, feeds_file_name: &Path) -> Result<Config
         serde_yaml::from_reader(pocket_file),
         format!(
             "failed to load configuration from {}",
-            feeds_file_name.to_string_lossy()
+            pocket_file_name.to_string_lossy()
         )
     );
     config.pocket = pocket_config;
