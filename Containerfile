@@ -1,4 +1,4 @@
-FROM rust:slim-bookworm as builder
+FROM rust:slim-bullseye as builder
 
 RUN apt-get update && apt-get install -y \
     libssl-dev \
@@ -12,12 +12,7 @@ COPY Cargo.* .
 
 RUN cargo build --release
 
-FROM debian:bookworm-slim
-
-RUN apt-get update && apt-get install -y \
-	ca-certificates \
-	openssl \
-	&& rm -rf /var/lib/apt/lists/* 
+FROM gcr.io/distroless/cc-debian11
 
 COPY --from=builder /rust/target/release/feeds-to-pocket /
 
