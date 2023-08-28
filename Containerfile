@@ -14,6 +14,8 @@ RUN cargo build --release
 
 FROM gcr.io/distroless/cc-debian11:nonroot
 
+LABEL org.opencontainers.image.source=https://github.com/ericz-home/feeds-to-pocket 
+
 COPY --from=builder /rust/target/release/feeds-to-pocket /
 
 ENTRYPOINT ["/feeds-to-pocket"]

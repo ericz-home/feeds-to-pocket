@@ -7,6 +7,8 @@ on:
 jobs:
   build:
     uses: ericz-home/home-ops/.github/workflows/build_publish.yml@main
+    permissions:
+      packages: write
     with:
       image: ${{ github.repository }}
     secrets: inherit
