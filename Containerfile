@@ -12,7 +12,7 @@ COPY Cargo.* .
 
 RUN cargo build --release
 
-FROM gcr.io/distroless/cc-debian11
+FROM gcr.io/distroless/cc-debian11:nonroot
 
 COPY --from=builder /rust/target/release/feeds-to-pocket /
 
